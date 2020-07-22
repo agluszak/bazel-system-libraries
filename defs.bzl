@@ -50,7 +50,7 @@ def _system_library_impl(repo_ctx):
         content =
             """
 load("@bazel_tools//tools/build_defs/cc:cc_import.bzl", "cc_import")
-cc_library(
+cc_import(
     name = "includes",
     {static_library}
     {shared_library}
