@@ -54,13 +54,6 @@ def _system_library_impl(repo_ctx):
         repo_ctx.symlink(shared_lib_path, shared_archive_name)
         static_library_param = "shared_library = \"{}\",".format(shared_archive_name)
 
-#    include_names = []
-#    for include in includes:
-#        include_name = include.lstrip("/").replace("/", "-")
-#        include_names.append(repr(include_name))
-#        repo_ctx.symlink(include, include_name)
-#    includes_param = "includes = [{}],".format(", ".join(include_names))
-
     hdr_names = []
     for hdr in hdrs:
         hdr_path = _find_header_path(repo_ctx, hdr, includes)
@@ -94,7 +87,8 @@ cc_import(
                 static_library = static_library_param,
                 shared_library = shared_library_param,
                 hdrs = hdrs_param,
-                deps = deps_param),
+                deps = deps_param,
+            ),
     )
 
 system_library = repository_rule(
@@ -105,6 +99,6 @@ system_library = repository_rule(
         "lib_path_hints": attr.string_list(),
         "includes": attr.string_list(),
         "hdrs": attr.string_list(),
-        "deps": attr.string_list()
+        "deps": attr.string_list(),
     },
 )
