@@ -1,26 +1,64 @@
-def _find_lib_path(repo_ctx, archive_name, lib_path_hints):
-    hint_params = []
-    for hint in lib_path_hints:
-        hint_params.append("-L" + hint)
+ENV_VAR_PREFIX = "bazel_"
+ENV_VAR_LIB_PREFIX = "lib_"
+ENV_VAR_INCLUDE_PREFIX = "include_"
+ENV_VAR_SEPARATOR = ";"
+
+def _make_flags(array_of_strings, prefix):
+    flags = []
+    if array_of_strings:
+        for s in array_of_strings:
+            flags.append(prefix + s)
+    return flags.join(" ")
+
+def _split_env_var(repo_ctx, var_name):
+    value = repo_ctx.os.environ[var_name]
+    if value:
+        return value.split(ENV_VAR_SEPARATOR)
+    else:
+        return []
+
+def _find_lib_path(repo_ctx, lib_name, archive_name, lib_path_hints):
+    override_paths_var_name = ENV_VAR_PREFIX + ENV_VAR_LIB_PREFIX + lib_name + "_override_paths"
+    override_paths = _split_env_var(repo_ctx, override_paths_var_name)
+    path_flags = _make_flags(override_paths + lib_path_hints, "-L")
 
     cmd = "ld -verbose -l:{} {} | grep succeeded | sed -e 's/^\s*attempt to open //' -e 's/ succeeded\s*$//'".format(
         archive_name,
-        " ".join(hint_params),
+        path_flags,
     )
     result = repo_ctx.execute(["/bin/bash", "-c", cmd])
 
     # No idea where that newline comes from
     return result.stdout.replace("\n", "")
 
-def _find_header_path(repo_ctx, header_name, includes):
-    include_params = []
-    for include in includes:
-        include_params.append("-I" + include)
+def _find_header_path(repo_ctx, lib_name, header_name, includes):
+    override_paths_var_name = ENV_VAR_PREFIX + ENV_VAR_INCLUDE_PREFIX + lib_name + "_override_paths"
+    additional_paths_var_name = ENV_VAR_PREFIX + ENV_VAR_INCLUDE_PREFIX + lib_name + "_paths"
+    override_paths = _split_env_var(repo_ctx, override_paths_var_name)
+    additional_paths = _split_env_var(repo_ctx, additional_paths_var_name)
 
-    # taken from https://stackoverflow.com/questions/63052707/which-header-exactly-will-c-preprocessor-include/63052918#63052918
-    cmd = "f=\"{}\"; echo | gcc -E {} -Wp,-v - 2>&1 | sed '\\~^ /~!d; s/ //' | while IFS= read -r path; do if [[ -e \"$path/$f\" ]]; then echo \"$path/$f\"; break; fi; done".format(
+    # See https://gcc.gnu.org/onlinedocs/gcc/Directory-Options.html
+    override_include_flags = _make_flags(override_paths, "-I")
+    standard_include_flags = _make_flags(includes, "-isystem")
+    additional_include_flags = _make_flags(additional_paths, "-idirafter")
+
+    # Taken from https://stackoverflow.com/questions/63052707/which-header-exactly-will-c-preprocessor-include/63052918#63052918
+    cmd = """
+          f=\"{}\"; \\
+          echo | \\
+          gcc -E {} {} {} -Wp,-v - 2>&1 | \\
+          sed '\\~^ /~!d; s/ //' | \\
+          while IFS= read -r path; \\
+              do if [[ -e \"$path/$f\" ]]; \\
+                  then echo \"$path/$f\";  \\
+                  break; \\
+              fi; \\
+          done
+          """.format(
         header_name,
-        " ".join(include_params),
+        override_include_flags,
+        standard_include_flags,
+        additional_include_flags,
     )
     result = repo_ctx.execute(["/bin/bash", "-c", cmd])
     return result.stdout.replace("\n", "")
@@ -96,6 +134,7 @@ system_library = repository_rule(
     local = True,
     attrs = {
         "lib_name": attr.string(mandatory = True),
+        "lib_archive_names": attr.string_list(),
         "lib_path_hints": attr.string_list(),
         "includes": attr.string_list(),
         "hdrs": attr.string_list(),
