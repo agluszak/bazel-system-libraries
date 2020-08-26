@@ -160,6 +160,7 @@ def _system_library_impl(repo_ctx):
             alias(
                 name = "includes",
                 actual = select({
+                    "@bazel_tools//src/conditions:remote": "remote_includes",
                     "//conditions:default": "local_includes",
                 })
                 visibility = ["//visibility:public"],
