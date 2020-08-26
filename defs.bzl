@@ -17,16 +17,40 @@ def _split_env_var(repo_ctx, var_name):
     else:
         return []
 
+def _execute_bash(repo_ctx, cmd):
+    return repo_ctx.execute(["/bin/bash", "-c", cmd])
+
+def _find_linker(repo_ctx):
+    ld = _execute_bash(repo_ctx, "which ld").stdout.replace("\n", "")
+    lld = _execute_bash(repo_ctx, "which lld").stdout.replace("\n", "")
+    if ld:
+        return ld
+    elif lld:
+        return lld
+    else:
+        fail("No linker found")
+
+def _find_compiler(repo_ctx):
+    gcc = _execute_bash(repo_ctx, "which g++").stdout.replace("\n", "")
+    clang = _execute_bash(repo_ctx, "which clang++").stdout.replace("\n", "")
+    if gcc:
+        return gcc
+    elif clang:
+        return clang
+    else:
+        fail("No compiler found")
+
 def _find_lib_path(repo_ctx, lib_name, archive_name, lib_path_hints):
     override_paths_var_name = ENV_VAR_PREFIX + ENV_VAR_LIB_PREFIX + lib_name + "_override_paths"
     override_paths = _split_env_var(repo_ctx, override_paths_var_name)
     path_flags = _make_flags(override_paths + lib_path_hints, "-L")
-
+    linker = _find_linker(repo_ctx)
     cmd = """
-          ld -verbose -l:{} {} | \\
+          {} -verbose -l:{} {} | \\
           grep succeeded | \\
           sed -e 's/^\s*attempt to open //' -e 's/ succeeded\s*$//'
           """.format(
+        linker,
         archive_name,
         path_flags,
     )
@@ -46,11 +70,12 @@ def _find_header_path(repo_ctx, lib_name, header_name, includes):
     standard_include_flags = _make_flags(includes, "-isystem")
     additional_include_flags = _make_flags(additional_paths, "-idirafter")
 
+    compiler = _find_compiler(repo_ctx)
     # Taken from https://stackoverflow.com/questions/63052707/which-header-exactly-will-c-preprocessor-include/63052918#63052918
     cmd = """
           f=\"{}\"; \\
           echo | \\
-          gcc -E {} {} {} -Wp,-v - 2>&1 | \\
+          {} -E {} {} {} -Wp,-v - 2>&1 | \\
           sed '\\~^ /~!d; s/ //' | \\
           while IFS= read -r path; \\
               do if [[ -e \"$path/$f\" ]]; \\
@@ -59,6 +84,7 @@ def _find_header_path(repo_ctx, lib_name, header_name, includes):
               fi; \\
           done
           """.format(
+        compiler,
         header_name,
         override_include_flags,
         standard_include_flags,
@@ -118,7 +144,7 @@ def _system_library_impl(repo_ctx):
 
     link_hdrs_command = ""
     for path, hdr in zip(hdr_paths, hdr_names):
-        link_hdrs_command += "ln -sf {} $(@D)/{}".format(path, hdr)
+        link_hdrs_command += "ln -sf {} $(@D)/{}\n".format(path, hdr)
 
     link_library_command = "ln -sf {} $(@D)/{}".format(archive_found_path, archive_fullname)
 
