@@ -22,7 +22,11 @@ def _find_lib_path(repo_ctx, lib_name, archive_name, lib_path_hints):
     override_paths = _split_env_var(repo_ctx, override_paths_var_name)
     path_flags = _make_flags(override_paths + lib_path_hints, "-L")
 
-    cmd = "ld -verbose -l:{} {} | grep succeeded | sed -e 's/^\s*attempt to open //' -e 's/ succeeded\s*$//'".format(
+    cmd = """
+          ld -verbose -l:{} {} | \\
+          grep succeeded | \\
+          sed -e 's/^\s*attempt to open //' -e 's/ succeeded\s*$//'
+          """.format(
         archive_name,
         path_flags,
     )
@@ -75,30 +79,35 @@ def _system_library_impl(repo_ctx):
     hdrs = repo_ctx.attr.hdrs
     deps = repo_ctx.attr.deps
     lib_path_hints = repo_ctx.attr.lib_path_hints
+    linkstatic = repo_ctx.attr.linkstatic
+    lib_archive_names = repo_ctx.attr.lib_archive_names
 
-    static_archive_name = _get_archive_name(lib_name, True)
-    static_lib_path = _find_lib_path(repo_ctx, static_archive_name, lib_path_hints)
-    shared_archive_name = _get_archive_name(lib_name, False)
-    shared_lib_path = _find_lib_path(repo_ctx, shared_archive_name, lib_path_hints)
-    if not static_lib_path and not shared_lib_path:
+    archive_found_path = ""
+    archive_fullname = ""
+    for name in lib_archive_names:
+        archive_fullname = _get_archive_name(name, linkstatic)
+        archive_found_path = _find_lib_path(repo_ctx, lib_name, archive_fullname, lib_path_hints)
+        if found_path:
+            break
+
+    if not archive_found_path:
         fail("Library {} could not be found".format(lib_name))
 
-    static_library_param = ""
-    if static_lib_path:
-        repo_ctx.symlink(static_lib_path, "lib.a")
-        static_library_param = "static_library = \"{}\",".format(static_archive_name)
-    shared_library_param = ""
-    if shared_lib_path:
-        repo_ctx.symlink(shared_lib_path, shared_archive_name)
-        static_library_param = "shared_library = \"{}\",".format(shared_archive_name)
+    static_library_param = "static_library = \"{}\",".format(archive_fullname) if linkstatic else ""
+    shared_library_param = "shared_library = \"{}\",".format(archive_fullname) if not linkstatic else ""
+    repo_ctx.symlink(archive_found_path, archive_fullname)
 
     hdr_names = []
+    hdr_paths = []
     for hdr in hdrs:
-        hdr_path = _find_header_path(repo_ctx, hdr, includes)
-        if not hdr_path:
-            fail("Could not find header {}".format(hdr))
-        repo_ctx.symlink(hdr_path, hdr)
-        hdr_names.append(repr(hdr))
+        hdr_path = _find_header_path(repo_ctx, lib_name, hdr, includes)
+        if hdr_path:
+            repo_ctx.symlink(hdr_path, hdr)
+            hdr_names.append(repr(hdr))
+            hdr_paths.append(hdr_path)
+        else:
+            print("Could not find header {}".format(hdr))
+
     hdrs_param = "hdrs = [{}],".format(", ".join(hdr_names))
 
     deps_names = []
@@ -107,25 +116,63 @@ def _system_library_impl(repo_ctx):
         deps_names.append(dep_name)
     deps_param = "deps = [{}],".format(",".join(deps_names))
 
+    link_hdrs_command = ""
+    for path, hdr in zip(hdr_paths, hdr_names):
+        link_hdrs_command += "ln -sf {} $(@D)/{}".format(path, hdr)
+
+    link_library_command = "ln -sf {} $(@D)/{}".format(archive_found_path, archive_fullname)
+
+    remote_library_param = "static_library = \"remote_link_archive\"," if linkstatic else "shared_library = \"remote_link_archive\","
+
     repo_ctx.file(
         "BUILD",
         executable = False,
         content =
             """
-load("@bazel_tools//tools/build_defs/cc:cc_import.bzl", "cc_import")
-cc_import(
-    name = "includes",
-    {static_library}
-    {shared_library}
-    {hdrs}
-    {deps}
-    visibility = ["//visibility:public"],
-)
-""".format(
+            load("@bazel_tools//tools/build_defs/cc:cc_import.bzl", "cc_import")
+            cc_import(
+                name = "local_includes",
+                {static_library}
+                {shared_library}
+                {hdrs}
+                {deps}
+            )
+
+            genrule(
+                name = "remote_link_headers",
+                outs = {hdr_names},
+                cmd = {link_hdrs_command}
+            )
+
+            genrule(
+                name = "remote_link_archive",
+                outs = [{archive_fullname}],
+                cmd = {link_library_command}
+            )
+
+            cc_import(
+                name = "remote_includes",
+                hdrs = [":remote_link_headers"],
+                {remote_library_param}
+                {deps}
+            )
+
+            alias(
+                name = "includes",
+                actual = select({
+                    "//conditions:default": "local_includes",
+                })
+                visibility = ["//visibility:public"],
+            )
+            """.format(
                 static_library = static_library_param,
                 shared_library = shared_library_param,
                 hdrs = hdrs_param,
                 deps = deps_param,
+                hdr_names = str(hdr_names),
+                link_hdrs_command = link_hdrs_command,
+                link_library_command = link_library_command,
+                remote_library_param = remote_library_param,
             ),
     )
 
@@ -139,5 +186,6 @@ system_library = repository_rule(
         "includes": attr.string_list(),
         "hdrs": attr.string_list(),
         "deps": attr.string_list(),
+        "linkstatic": attr.bool(),
     },
 )
