@@ -5,8 +5,7 @@ cc_binary(
     srcs = ["main.cpp"],
     linkstatic = 1,
     deps = [
-        "@SDL2//:includes",
-        "@SDL2_image//:includes",
-        "@jpeg//:includes",
+        "@SDL2_image",
+        "@jpeg",
     ],
 )

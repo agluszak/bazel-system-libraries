@@ -1,5 +1,5 @@
 // taken from http://www.andrewewhite.net/wordpress/2010/04/07/simple-cc-jpeg-writer-part-2-write-to-buffer-in-memory/
-#include "SDL2/SDL.h"  
+#include "SDL2/SDL.h"
 #include "SDL2/SDL_image.h"
 #include "jpeglib.h"
  

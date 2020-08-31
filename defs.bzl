@@ -8,9 +8,12 @@ def _make_flags(array_of_strings, prefix):
     if array_of_strings:
         for s in array_of_strings:
             flags.append(prefix + s)
-    return flags.join(" ")
+    return " ".join(flags)
 
 def _split_env_var(repo_ctx, var_name):
+    return []
+
+    # TODO remove
     value = repo_ctx.os.environ[var_name]
     if value:
         return value.split(ENV_VAR_SEPARATOR)
@@ -71,6 +74,7 @@ def _find_header_path(repo_ctx, lib_name, header_name, includes):
     additional_include_flags = _make_flags(additional_paths, "-idirafter")
 
     compiler = _find_compiler(repo_ctx)
+
     # Taken from https://stackoverflow.com/questions/63052707/which-header-exactly-will-c-preprocessor-include/63052918#63052918
     cmd = """
           f=\"{}\"; \\
@@ -84,8 +88,8 @@ def _find_header_path(repo_ctx, lib_name, header_name, includes):
               fi; \\
           done
           """.format(
-        compiler,
         header_name,
+        compiler,
         override_include_flags,
         standard_include_flags,
         additional_include_flags,
@@ -99,7 +103,8 @@ def _get_archive_name(lib_name, static):
     else:
         return "lib" + lib_name + ".so"
 
-def _system_library_impl(repo_ctx):
+def system_library_impl(repo_ctx):
+    repo_name = repo_ctx.attr.name
     lib_name = repo_ctx.attr.lib_name
     includes = repo_ctx.attr.includes
     hdrs = repo_ctx.attr.hdrs
@@ -113,7 +118,7 @@ def _system_library_impl(repo_ctx):
     for name in lib_archive_names:
         archive_fullname = _get_archive_name(name, linkstatic)
         archive_found_path = _find_lib_path(repo_ctx, lib_name, archive_fullname, lib_path_hints)
-        if found_path:
+        if archive_found_path:
             break
 
     if not archive_found_path:
@@ -129,24 +134,51 @@ def _system_library_impl(repo_ctx):
         hdr_path = _find_header_path(repo_ctx, lib_name, hdr, includes)
         if hdr_path:
             repo_ctx.symlink(hdr_path, hdr)
-            hdr_names.append(repr(hdr))
+            hdr_names.append(hdr)
             hdr_paths.append(hdr_path)
         else:
             print("Could not find header {}".format(hdr))
 
-    hdrs_param = "hdrs = [{}],".format(", ".join(hdr_names))
+    hdrs_param = "hdrs = {},".format(str(hdr_names))
+
+    # This is needed for the case when quote-includes and system-includes alternate in the include chain, i.e.
+    # #include <SDL2/SDL.h> -> #include "SDL_main.h" -> #include <SDL2/_real_SDL_config.h> -> #include "SDL_platform.h"
+    # The problem is that the quote-includes are assumed to be
+    # in the same directory as the header they are included from - they have no subdir prefix ("SDL2/") in their paths
+    include_subdirs = dict()
+    for hdr in hdr_names:
+        path_segments = hdr.split("/")
+        path_segments.pop()
+        current_path_segments = ["external", repo_name]
+        for segment in path_segments:
+            current_path_segments.append(segment)
+            current_path = "/".join(current_path_segments)
+            include_subdirs.update({current_path: None})
+
+        # WTF?
+        current_path_segments = ["bazel-bin/external", repo_name]
+        for segment in path_segments:
+            current_path_segments.append(segment)
+            current_path = "/".join(current_path_segments)
+            include_subdirs.update({current_path: None})
+
+    includes_param = "includes = {},".format(str(include_subdirs.keys()))
 
     deps_names = []
     for dep in deps:
-        dep_name = repr("@" + dep + "//:includes")
+        dep_name = repr("@" + dep)
         deps_names.append(dep_name)
     deps_param = "deps = [{}],".format(",".join(deps_names))
 
     link_hdrs_command = ""
+    remote_hdrs = []
     for path, hdr in zip(hdr_paths, hdr_names):
-        link_hdrs_command += "ln -sf {} $(@D)/{}\n".format(path, hdr)
+        remote_hdr = "remote/" + hdr
+        remote_hdrs.append(remote_hdr)
+        link_hdrs_command += "echo {path} && ln -sf {path} $(RULEDIR)/{hdr}\n".format(path = path, hdr = remote_hdr)
 
-    link_library_command = "ln -sf {} $(@D)/{}".format(archive_found_path, archive_fullname)
+    remote_archive_fullname = "remote/" + archive_fullname
+    link_library_command = "ln -sf {} $(RULEDIR)/remote/{}".format(archive_found_path, remote_archive_fullname)
 
     remote_library_param = "static_library = \"remote_link_archive\"," if linkstatic else "shared_library = \"remote_link_archive\","
 
@@ -155,57 +187,66 @@ def _system_library_impl(repo_ctx):
         executable = False,
         content =
             """
-            load("@bazel_tools//tools/build_defs/cc:cc_import.bzl", "cc_import")
-            cc_import(
-                name = "local_includes",
-                {static_library}
-                {shared_library}
-                {hdrs}
-                {deps}
-            )
+load("@bazel_tools//tools/build_defs/cc:cc_import.bzl", "cc_import")
+cc_import(
+    name = "local_includes",
+    {static_library}
+    {shared_library}
+    {hdrs}
+    {deps}
+    {includes}
+)
 
-            genrule(
-                name = "remote_link_headers",
-                outs = {hdr_names},
-                cmd = {link_hdrs_command}
-            )
+genrule(
+    name = "remote_link_headers",
+    outs = {remote_hdrs},
+    cmd = {link_hdrs_command}
+)
 
-            genrule(
-                name = "remote_link_archive",
-                outs = [{archive_fullname}],
-                cmd = {link_library_command}
-            )
+genrule(
+    name = "remote_link_archive",
+    outs = ["{remote_archive_fullname}"],
+    cmd = {link_library_command}
+)
 
-            cc_import(
-                name = "remote_includes",
-                hdrs = [":remote_link_headers"],
-                {remote_library_param}
-                {deps}
-            )
+cc_import(
+    name = "remote_includes",
+    hdrs = [":remote_link_headers"],
+    {remote_library_param}
+    {deps}
+    {includes}
+)
 
-            alias(
-                name = "includes",
-                actual = select({
-                    "@bazel_tools//src/conditions:remote": "remote_includes",
-                    "//conditions:default": "local_includes",
-                })
-                visibility = ["//visibility:public"],
-            )
-            """.format(
+alias(
+    name = "{name}",
+    actual = select({{
+        "@bazel_tools//src/conditions:remote": "remote_includes",
+        "//conditions:default": "local_includes",
+    }}),
+    visibility = ["//visibility:public"],
+)
+""".format(
                 static_library = static_library_param,
                 shared_library = shared_library_param,
                 hdrs = hdrs_param,
                 deps = deps_param,
                 hdr_names = str(hdr_names),
-                link_hdrs_command = link_hdrs_command,
-                link_library_command = link_library_command,
+                archive_fullname = archive_fullname,
+                link_hdrs_command = repr(link_hdrs_command),
+                link_library_command = repr(link_library_command),
                 remote_library_param = remote_library_param,
+                name = lib_name,
+                includes = includes_param,
+                remote_hdrs = remote_hdrs,
+                remote_archive_fullname = remote_archive_fullname,
             ),
     )
 
 system_library = repository_rule(
-    implementation = _system_library_impl,
+    implementation = system_library_impl,
     local = True,
+    remotable = True,
+    environ = [],
     attrs = {
         "lib_name": attr.string(mandatory = True),
         "lib_archive_names": attr.string_list(),
