@@ -1,68 +1,45 @@
-# This .bazelrc file contains all of the flags required for the provided
-# toolchain with Remote Build Execution.
-# Note your WORKSPACE must contain an rbe_autoconfig target with
-# name="rbe_default" to use these flags as-is.
+common --enable_platform_specific_config
+# Shared configuration flags to build and test Bazel on RBE.
+build:remote_shared --define=EXECUTOR=remote
+build:remote_shared --remote_instance_name=projects/bazel-untrusted/instances/default_instance
+build:remote_shared --remote_executor=grpcs://remotebuildexecution.googleapis.com
+build:remote_shared --remote_timeout=600
+build:remote_shared --jobs=100
+build:remote_shared --action_env=PATH=/bin:/usr/bin:/usr/local/bin
+build:remote_shared --disk_cache=
+# Workaround for singlejar incompatibility with RBE
+build:remote_shared --noexperimental_check_desugar_deps
 
-# Depending on how many machines are in the remote execution instance, setting
-# this higher can make builds faster by allowing more jobs to run in parallel.
-# Setting it too high can result in jobs that timeout, however, while waiting
-# for a remote machine to execute them.
-build:remote --jobs=50
+# Configuration to build and test Bazel on RBE on Ubuntu 18.04 with Java 11
+build:ubuntu1804_java11 --host_javabase=@rbe_ubuntu1804_java11//java:jdk
+build:ubuntu1804_java11 --javabase=@rbe_ubuntu1804_java11//java:jdk
+build:ubuntu1804_java11 --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_java9
+build:ubuntu1804_java11 --java_toolchain=@bazel_tools//tools/jdk:toolchain_java9
+build:ubuntu1804_java11 --crosstool_top=@rbe_ubuntu1804_java11//cc:toolchain
+build:ubuntu1804_java11 --extra_toolchains=@rbe_ubuntu1804_java11//config:cc-toolchain
+build:ubuntu1804_java11 --extra_execution_platforms=//:rbe_ubuntu1804_java11_platform
+build:ubuntu1804_java11 --extra_execution_platforms=//:rbe_ubuntu1804_java11_highcpu_platform
+build:ubuntu1804_java11 --host_platform=//:rbe_ubuntu1804_java11_platform
+build:ubuntu1804_java11 --platforms=//:rbe_ubuntu1804_java11_platform
+build:ubuntu1804_java11 --config=remote_shared
 
-# Set several flags related to specifying the platform, toolchain and java
-# properties.
-# These flags should only be used as is for the rbe-ubuntu16-04 container
-# and need to be adapted to work with other toolchain containers.
-build:remote --host_javabase=@rbe_default//java:jdk
-build:remote --javabase=@rbe_default//java:jdk
-build:remote --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_hostjdk8
-build:remote --java_toolchain=@bazel_tools//tools/jdk:toolchain_hostjdk8
-build:remote --crosstool_top=@rbe_default//cc:toolchain
-build:remote --action_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
-# Platform flags:
-# The toolchain container used for execution is defined in the target indicated
-# by "extra_execution_platforms", "host_platform" and "platforms".
-# More about platforms: https://docs.bazel.build/versions/master/platforms.html
-build:remote --extra_toolchains=@rbe_default//config:cc-toolchain
-build:remote --extra_execution_platforms=@rbe_default//config:platform
-build:remote --host_platform=@rbe_default//config:platform
-build:remote --platforms=@rbe_default//config:platform
+# Configuration to build and test Bazel on RBE on Ubuntu 16.04 with Java 8
+build:ubuntu1604_java8 --host_javabase=@rbe_ubuntu1604_java8//java:jdk
+build:ubuntu1604_java8 --javabase=@rbe_ubuntu1604_java8//java:jdk
+build:ubuntu1604_java8 --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_hostjdk8
+build:ubuntu1604_java8 --java_toolchain=@bazel_tools//tools/jdk:toolchain_hostjdk8
+build:ubuntu1604_java8 --crosstool_top=@rbe_ubuntu1604_java8//cc:toolchain
+build:ubuntu1604_java8 --extra_toolchains=@rbe_ubuntu1604_java8//config:cc-toolchain
+build:ubuntu1604_java8 --extra_execution_platforms=//:rbe_ubuntu1604_java8_platform
+build:ubuntu1604_java8 --extra_execution_platforms=//:rbe_ubuntu1604_java8_highcpu_platform
+build:ubuntu1604_java8 --host_platform=//:rbe_ubuntu1604_java8_platform
+build:ubuntu1604_java8 --platforms=//:rbe_ubuntu1604_java8_platform
+build:ubuntu1604_java8 --config=remote_shared
 
-# Starting with Bazel 0.27.0 strategies do not need to be explicitly
-# defined. See https://github.com/bazelbuild/bazel/issues/7480
-build:remote --define=EXECUTOR=remote
+# Alias
+build:remote --config=ubuntu1604_java8
 
-# Enable remote execution so actions are performed on the remote systems.
-build:remote --remote_executor=grpcs://remotebuildexecution.googleapis.com
+build:macos --macos_minimum_os=10.10
 
-# Enforce stricter environment rules, which eliminates some non-hermetic
-# behavior and therefore improves both the remote cache hit rate and the
-# correctness and repeatability of the build.
-build:remote --incompatible_strict_action_env=true
-
-# Set a higher timeout value, just in case.
-build:remote --remote_timeout=3600
-
-# Enable authentication. This will pick up application default credentials by
-# default. You can use --google_credentials=some_file.json to use a service
-# account credential instead.
-build:remote --google_default_credentials=true
-
-# Docker Sandbox Mode
-build:docker-sandbox --host_javabase=@rbe_default//java:jdk
-build:docker-sandbox --javabase=@rbe_default//java:jdk
-build:docker-sandbox --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_hostjdk8
-build:docker-sandbox --java_toolchain=@bazel_tools//tools/jdk:toolchain_hostjdk8
-build:docker-sandbox --crosstool_top=@rbe_default//cc:toolchain
-build:docker-sandbox  --action_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
-
-build:docker-sandbox --extra_toolchains=@rbe_default//config:cc-toolchain
-build:docker-sandbox --extra_execution_platforms=@rbe_default//config:platform
-build:docker-sandbox --host_platform=@rbe_default//config:platform
-build:docker-sandbox --platforms=@rbe_default//config:platform
-build:docker-sandbox --experimental_docker_image=docker_container #rbe-ubuntu16-04
-build:docker-sandbox --spawn_strategy=docker --strategy=Javac=docker --genrule_strategy=docker
-build:docker-sandbox --define=EXECUTOR=remote
-build:docker-sandbox --experimental_docker_verbose
-build:docker-sandbox --experimental_enable_docker_sandbox
-build:docker-sandbox --repo_env=CC=gcc
+# User-specific .bazelrc
+try-import user.bazelrc
